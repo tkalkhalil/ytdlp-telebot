@@ -16,6 +16,8 @@ TOKEN=""  # Get it from BotFather t.me/BotFather
 #["default", "tv", "tv_embedded", "ios", "web", "mweb"]
 # If it doesn't work, try getting a POT: see https://github.com/yt-dlp/yt-dlp/issues/12482#issuecomment-2838640409
 
+COOKIES="brave"
+
 # - Separate video+audio, up to 1280x720 or vertical 720x1280
 # - Single file, same resolution
 # - Anything that's available of lower resolution

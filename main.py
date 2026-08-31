@@ -87,6 +87,10 @@ formats = os.environ.get('FORMATS', default_formats)
 sizeless_formats = os.environ.get('SIZELESS_FORMATS', default_sizeless_formats)
 default_options.update({'format': formats})
 
+cookies = os.environ.get('COOKIES', None)
+if cookies:
+    default_options.update({'cookiesfrombrowser': (cookies,)})  # The "," is necessary!
+
 extra_args = os.environ.get('EXTRA_ARGS')
 if extra_args:
     extra_args = json.loads(extra_args)
