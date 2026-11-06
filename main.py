@@ -29,11 +29,9 @@ regex = os.environ.get('REGEX', r'\bhttps?://\S*\b')
 tempdir = os.environ.get('TEMPDIR', '/tmp/ytdlp-telebot')
 
 # Find the path to Node for the JS challenge solver
-NODE_PATH= "/usr/bin/node"
-                 key=lambda p: tuple(map(int, p.parts[-3][1:].split("."))),)).as_posix()
-logger.info(f"Detected Node.js path: '{NODE_PATH}'")
+NODE_PATH = "/usr/bin/node"
+logger.info(f"Detected Node.js path: {NODE_PATH}")
 
-default_formats = (
                    ' (ba[ext=m4a] / ba)'  # Prefer m4a, otherwise it likes to get mp4 which is often "Forbidden"
                    '    + bv[width>=800][height<=800][filesize<50M]'
                    '/(ba[ext=m4a] / ba)'
