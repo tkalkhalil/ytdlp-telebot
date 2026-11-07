@@ -12,360 +12,61 @@ from dotenv import load_dotenv
 import telebot
 from yt_dlp import YoutubeDL, utils
 
-
 logging.basicConfig(format="%(levelname)s:%(module)s: %(message)s")
-logger = logging.getLogger(__name__)  # This logger's name does not matter!
+logger = logging.getLogger(__name__)
 DEBUG = "--debug" in sys.argv
 logger.setLevel(logging.DEBUG if DEBUG else logging.WARNING)
 
-
-load_dotenv()  # Load values from .env into envvars
+load_dotenv()
 
 token = os.environ.get('TOKEN', None)
 if not token:
     logger.error("ERROR: Specify TOKEN in an .env file or an environment variable!")
     exit(1)
-regex = os.environ.get('REGEX', r'\bhttps?://\S*\b')
-tempdir = os.environ.get('TEMPDIR', '/tmp/ytdlp-telebot')
 
-# Find the path to Node for the JS challenge solver
-NODE_PATH = "/usr/bin/node"
+regex = os.environ.get('REGEX', r'\\bhttps?://\\S+\\b')
+tempdir = os.environ.get('TEMPLDIR', '/tmp/ytdlp-telebot')
+
+import shutil
+NODE_PATH = shutil.which("node") or "/usr/bin/node"
 logger.info(f"Detected Node.js path: {NODE_PATH}")
 
-                   ' (ba[ext=m4a] / ba)'  # Prefer m4a, otherwise it likes to get mp4 which is often "Forbidden"
-                   '    + bv[width>=800][height<=800][filesize<50M]'
-                   '/(ba[ext=m4a] / ba)'
-                   '    + bv[width<=800][height>=800][filesize<50M]'
-                   '/   best[width>=800][height<=800][filesize<50M]'
-                   '/   best[width<=800][height>=800][filesize<50M]'
+default_formats = (
+    '(ba[ext=m4a] / ba) '
+    ' + bv[width>=800][height<=800][filesize<50M]'
+    '/(ba[ext=m4a] / ba)'
+    ' + bv[width>=800][height>=800][filesize<50M]'
+    '/'
+    'best[width>=800][height<=800][filesize<50M]'
+    '/'
+    'best[width>=800][height>=800][filesize<50M]'
+    '/'
+    '(ba[ext=m4a] / ba)'
+    ' + bv[width<=800][filesize<50M]'
+    '/'
+    'best[width<=800][filesize<50M]'
+    '/'
+    'bv[filesize<50M] + ba/best[filesize<50M]'
+    '/'
+    'best'
+)
 
-                   '/(ba[ext=m4a] / ba)'
-                   '    + bv[width<=800][height<=800][filesize<50M]'
-                   '/   best[width<=800][height<=800][filesize<50M]'
-                   )
-# For websites that don't expose file size
 default_sizeless_formats = (
-                   ' (ba[ext=m4a] / ba)'
-                   '    + bv[width>=800][height<=800]'
-                   '/(ba[ext=m4a] / ba)'
-                   '    + bv[width<=800][height>=800]'
-                   '/   best[width>=800][height<=800]'
-                   '/   best[width<=800][height>=800]'
-
-                   '/ba + bv[width<=800][height<=800]'
-                   '/   best[width<=800][height<=800]'
-                   )
-
-default_options = {'format_sort': ['codec:h265:h264:h263,acodec:aac:opus:mp3,ext:m4a'],
-           'max_filesize': 52428800,  # 50 MB - Telegram's limit for bots; abort if larger
-           'subtitleslangs': ['en'],
-           'writesubtitles': True,
-           # 'progress_hooks': [progress],  # A function to call back!
-           # 'verbose': True,  # They require it for bug reporting
-
-           'paths': {'home': tempdir},  # Autocreated if don't exist!
-           'concurrent_fragment_downloads': 10,
-           'retries': 10,
-           'fragment_retries': 10,
-           'js_runtimes': { "node": { "path": NODE_PATH } },
-           'skip_unavailable_fragments': False,  # Abort on fragment failures - to catch SABR errors
-
-           'postprocessors': [{'key': 'FFmpegEmbedSubtitle',  # Subs: do not embed if subs already present?
-                               'already_have_subtitle': False},
-                              {'key': 'FFmpegMetadata',  # Metadata: only chapters
-                               'add_chapters': True,
-                               'add_infojson': False,
-                               'add_metadata': False},]}
-
-proxy = os.environ.get('PROXY', None)
-if proxy:
-    default_options.update({'proxy': proxy})
-
-formats = os.environ.get('FORMATS', default_formats)
-sizeless_formats = os.environ.get('SIZELESS_FORMATS', default_sizeless_formats)
-default_options.update({'format': formats})
-
-cookies = os.environ.get('COOKIES', None)
-if cookies:
-    default_options.update({'cookiesfrombrowser': (cookies,)})  # The "," is necessary!
-
-extra_args = os.environ.get('EXTRA_ARGS')
-if extra_args:
-    extra_args = json.loads(extra_args)
-    default_options.update(extra_args)
-
-logger.info(f"TEMPDIR: {tempdir}")
-logger.info(f"REGEX: {regex}")
-logger.info(f"PROXY: {proxy}")
-logger.info(f"EXTRA_ARGS: {extra_args}")
-logger.info(f"FORMATS: {formats}")
-
-try:
-    bot = telebot.TeleBot(token)
-except Exception as err:
-    logger.error(f"Failed to register the bot!\n{err}")
-    exit(1)
-
-
-# We no longer need this because we get 'info' with the first request!
-# def get_formats(url):
-#     try:
-#         with YoutubeDL(dict(options, extract_flat=False, listformats=True)) as ydl:
-#             info = ydl.sanitize_info(ydl.extract_info(url, download=False))
-#     except utils.DownloadError:
-#         return None
-#     return info
-
-
-def extract_formats(info):
-    result = []
-    for i in info:  # There are multiple format entries!
-        # Map data
-        # format_id = i.get('format_id')
-        filesize = i.get('filesize')
-        width = i.get('width')
-        height = i.get('height')
-        fps = i.get('fps')
-        video = i.get('vcodec', 'none') or 'none'
-        audio = i.get('acodec', 'none') or 'none'
-        samplerate = i.get('asr')
-        bitrate = i.get('abr') or i.get('tbr')
-        vbr = i.get('vbr')
-
-        # Normalize data
-        filesize = filesize // 1048576 if filesize else None
-        video = video.split('.')[0] if video != 'none' else None
-        audio = audio.split('.')[0] if audio != 'none' else None
-
-        if not video and not audio:
-            continue  # Skip the "stupid" formats
-
-        result.append({
-            'filesize': filesize,
-            'width': width,
-            'height': height,
-            'fps': fps,
-            'video': video,
-            'audio': audio,
-            'samplerate': samplerate,
-            'bitrate': bitrate,
-            'vbr': vbr,
-            })
-
-    def sorter(key):
-        if key['video']:
-            return max(key['width'], key['height']), key['fps'], key['vbr'] or 0
-        elif key['audio']:
-            return key['bitrate'], 0, key['bitrate'] or 0
-
-    result.sort(key=sorter)
-    return result
-
-
-def render_formats(result):
-    display = f"{'Resolution':^14} {'Bitrate':^9} {'Size':^8} {'Codecs'}\n"
-    # One line is up to 50 symbols long (usually); that's what fits well
-    # Max message length is 4096 chars, and we have the caption on top of that
-    # So, we can afford up to 80 lines (even a little over that)
-    max_lines = 80
-    if result[-max_lines:] != result:
-        display += f"  <...over {max_lines} lines - truncated...>\n"
-    for r in result[-max_lines:]:
-        size = f"({r['filesize']} MB)" if r['filesize'] else f"(      )"
-        resolution = f"{r['width'] or '-'}x{r['height'] or '-'}p{r['fps'] or ''}" if r['video'] \
-            else f"{r['samplerate'] or '---'}"
-        bitrate = f"{int(r['vbr']) if r['vbr'] else '---'}:{int(r['bitrate']) if r['bitrate'] else '---'}"
-        codecs = f"{r['video'] or '---'}:{r['audio'] or '---'}"
-
-        display += f"{resolution:14} {bitrate:9} {size:>8} {codecs}\n"
-    print(f"Formats available:\n{display}")
-    return display
-
-
-def send_error_message(original_message, error, url=None, extra=None):
-    if isinstance(error, utils.DownloadError):  # It might be just a string!
-        error_message = str(error.exc_info[1])
-        error_type = str(error.exc_info[0])
-    else:
-        error_message = str(error)
-        error_type = None
-    logger.info(f"-- Sending a notification for {url}: {error_message} ({error_type})")
-
-    message = error_message
-    if error_type:
-        message += f'\n\n{error_type}'
-    if extra:
-        message += f'\n\n{extra}'
-    if url:
-        message += f'\n\n{url}'
-    # It gets logged to stderr already, so no need to print it!
-    try:
-        bot.send_message(original_message.chat.id, message, reply_to_message_id=original_message.message_id)
-    except Exception as error:
-        # Don't send any original text because that might be the cause of the failure!
-        bot.send_message(original_message.chat.id, f"⚠️ FAILED to post an error message!"
-                                                   f"\nPossible reason:\n\n{str(error)}")
-
-
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    bot.reply_to(message, "I extract links from any messages, "
-                          "and if they contain any videos, I try to download and post them.")
-
-
-# By default, the handler is not invoked on any messages that have any attachments!
-# This is actually good - just ignore those!
-# This is how you would specify other applicable types of messages to receive:
-#@bot.message_handler(content_types=['text', 'photo', 'document', 'audio', 'video',
-#                     'voice', 'sticker', 'contact', 'location', 'poll'])
-@bot.message_handler(func=lambda message: True)  # Just check all messages - no need to filter here!
-def check_message(message):
-    matches = re.findall(regex, message.text)
-    if not matches:
-        return
-
-    one_video_sent = False  # I've checked that this is safe for concurrent invocations!
-    for index, url in enumerate(matches):
-        logger.info(f"-- Downloading video {index+1} of {len(matches)}")
-        filename = f"{message.chat.id}-{message.id}-{index+1}.%(ext)s"  # This filename will be unique
-        info = None  # We don't want it to be uninitialized!
-        options = deepcopy(default_options)  # To be able to mutate it (quirks) without affecting the global one!
-
-        # Apply quirks
-        base_url = urlparse(url).hostname  # [www.]tiktok.com
-        # Tiktok: H.265 advertises audio but is served without it - use H.264 instead!
-        if base_url in {"tiktok.com"} or base_url.endswith(".tiktok.com"):  # 'tiktok.com' or '*.tiktok.com'
-            options.update({'format_sort': ['codec:h264,acodec:aac,ext:m4a']})
-
-        # === First download attempt ===
-
-        # Quick check if this is a playlist - we don't want to accidentally download it
-        # If we download a playlist non-flatly, it will throw errors about deleted videos!
-        # We want the playlist to successfully abort, so it must not go into the "except:" territory!
-        # With 'listformats', this will not fail due to "Requested format not available", so we will get 'info'!
-        try:
-            logger.info('-- Checking if this is a playlist')
-            with YoutubeDL(dict(options, outtmpl=filename, extract_flat=True, listformats=True)) as ydl:
-                info = ydl.sanitize_info(ydl.extract_info(url, download=False))
-            logger.info("-- Made it through the first request and got 'info'!")
-
-            if info.get('entries') or (info.get('_type') == "playlist"):
-                logger.info(f'-- This is a playlist - skipping')
-                continue  # This is a playlist - abort quietly
-
-            logger.info('-- Attempting to download the video')
-            with YoutubeDL(dict(options, outtmpl=filename, extract_flat=False)) as ydl:
-                info = ydl.sanitize_info(ydl.extract_info(url, download=True))
-
-        except utils.DownloadError as error:
-            # Note the dumbness: DownloadError is an ENVELOPE for any other exception!
-            # - error: DownloadError
-            # - error.exc_info[0]: type of the actual error (e.g. ExtractorError)
-            # - error.exc_info[1]: the error itself (e.g. ExtractorError)
-            # - Both str(error) and str(error.exc_info[1]) show the same error message!
-            # Check for UnsupportedError first, because it is also an ExtractorError!
-            if isinstance(error.exc_info[1], utils.UnsupportedError):
-                logger.info(f'-- Not a video ({error.exc_info[0]})')
-                # This is not a video - just move on to the next link
-                continue
-
-            logger.info(f'-- Failed: {error.exc_info[1]} ({error.exc_info[0]}) - trying again')
-            more_options = {}
-            # Errors in yt-dlp are HORSE SHIT - just check their messages, don't even try their types!
-            # if isinstance(error.exc_info[1], utils.GeoRestrictedError) or "IP address" in str(error.exc_info[1]):
-            #     logger.info(f'-- GeoRestrictedError: try the backup proxy')
-            #     more_options.update({'proxy': proxy2})
-            if "Requested format is not available" in str(error.exc_info[1]):
-                logger.info('-- Requested format is not available')
-                # See if any formats expose their size
-                if info:  # If we failed to get 'info', then the issue is not about formats!
-                    if not any(i.get('filesize') for i in info.get('formats')):
-                        logger.info('-- This website does not expose sizes; try with sizeless formats')
-                        more_options.update({'format': sizeless_formats})
-                    else:
-                        logger.info('-- The video is indeed too large')
-
-            # === Second download attempt ===
-
-            # Try again on any error - optionally with new options
-            try:
-                with YoutubeDL(dict(options, **more_options, outtmpl=filename, extract_flat=False)) as ydl:
-                    info = ydl.sanitize_info(ydl.extract_info(url, download=True))
-            except utils.DownloadError as error:
-                # We'd like to see what formats are available
-                logger.info('-- Second download attempt failed')
-                # It's an ExtractorError when "only extracting", but DownloadError when downloading!
-                if "Requested format is not available" in str(error.exc_info[1]):
-                    logger.info('-- Requested format is not available; extracting formats for the error message')
-                    if not info:
-                        send_error_message(message, error, url, "Formats available: FAILED to extract!")
-                        continue
-                    else:
-                        send_error_message(message, error, url)
-                        rendered_formats = render_formats(extract_formats(info.get('formats')))
-                        rendered_formats = f"Formats available:\n<pre>{rendered_formats}</pre>"
-                        # Send a separate message with formats
-                        bot.send_message(message.chat.id, rendered_formats, parse_mode='HTML')
-                        continue
-                else:
-                    send_error_message(message, error, url)
-                    continue
-
-        # === Send the video ===
-
-        # Get the actual filename that was created (with whatever extension it was assigned)
-        filenames = info.get('requested_downloads')  # There's a list
-        if len(filenames) != 1:
-            send_error_message(message, f"WARNING: Got {len(filenames)} downloaded files for some reason!", url)
-        filename = filenames[0].get('filepath')
-
-        # Check that we're going to delete a normal file
-        if not os.path.isfile(filename):
-            send_error_message(message, f"WARNING: File not found: {filename}", url)
-
-        # Compose and post the message
-        with open(filename, 'rb') as file:
-            try:
-                # Video caption (for all messages)
-                html = f"<b>{info.get('fulltitle')}</b>\n" if info.get('fulltitle') else ""
-                if one_video_sent:
-                    # This is a follow-up video - add the URL
-                    html += url
-                else:
-                    # This is the first video - include the original message
-                    html += "\n" + message.html_text
-                    # Tag the sender (Annie asked to leave it on; to see who posted the original message)
-                    if message.chat.type != "private":  # But not if it's in direct messages!
-                        html += f"\n\n@{message.from_user.username}"
-                        # For some reason, message.forward_from is ALWAYS None!
-                        # (That probably means that both of us always hide our usernames!)
-                        # So, I can't get it to tag the author if it was forwarded!
-
-                bot.send_video(message.chat.id, file, caption=html, parse_mode="HTML")
-                one_video_sent = True
-
-            except Exception as error:
-                send_error_message(message, error, url)
-
-        os.remove(filename)
-
-    if one_video_sent:
-        try:
-            bot.delete_message(message.chat.id, message.id)
-        except Exception as error:
-            send_error_message(message, error)
-
-
-def stop(sig, _):
-    # Better 'print' this because it's not a "warning/error" level but we want to see it
-    print(f"Caught {signal.Signals(sig).name}, exiting gracefully...")
-    bot.stop_bot()
-    exit(0)
-
-
-# Register callables to execute on signals
-# Those callables must accept two arguments: (signal, frame)
-signal.signal(signal.SIGINT, stop)
-signal.signal(signal.SIGTERM, stop)
-
-bot.infinity_polling()
+    'ba[ext=m4a] / ba'
+    ' + bv[width>=800][height<=800]'
+    '/(ba[ext=m4a] / ba)'
+    ' + bv[width>=800][height>=800]'
+    '/'
+    'best[width>=800][height<=800]'
+    '/'
+    'best[width>=800][height>=800]'
+    '/'
+    '(ba[ext=m4a] / ba)'
+    ' + bv[width<=800]'
+    '/'
+    'best[width<=800]'
+    '/'
+    'bv + ba/best'
+    '/'
+    'best'
+)
